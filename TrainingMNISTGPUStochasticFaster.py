@@ -8,12 +8,22 @@ from typing import Tuple
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
+import urllib.request
+import zipfile
+import os
 
 import kornia as K
 
 # Import the model from your SinogramsStochasticMNIST.py
 from TTNsinogramsStochastic import TTNSinogramStochastic
 
+url = "http://www.iro.umontreal.ca/~lisa/icml2007data/mnist_rotation_new.zip"
+zip_path = "mnist_rotation.zip"
+urllib.request.urlretrieve(url, zip_path)
+
+# Extract files
+with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+    zip_ref.extractall("rotated_mnist")
 
 # -----------------------------
 # .amat Dataset Loader
@@ -80,8 +90,8 @@ def make_rotation_bank_gpu(x0: torch.Tensor, angles_deg: torch.Tensor) -> torch.
 @dataclass
 class TrainConfig:
     # Update paths to your .amat files
-    train_path: str = 'mnist_all_rotation_normalized_float_train_valid.amat'
-    test_path: str = 'mnist_all_rotation_normalized_float_test.amat'
+    train_path: str = 'rotated_mnist/mnist_all_rotation_normalized_float_train_valid.amat'
+    test_path: str = 'rotated_mnist/mnist_all_rotation_normalized_float_test.amat'
     out_dir: str = "./results_Stochastic"
     filename_base = 'result_Mnist'
 
