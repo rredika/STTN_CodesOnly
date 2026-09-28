@@ -50,7 +50,14 @@ class StochasticTraceWrapper(nn.Module):
         device = x.device
         
         # Monte Carlo sampling of rotation angles
-        angles = torch.rand(self.T, device=device) * 360.0
+        # angles = torch.rand(self.T, device=device) * 360.0
+        # angles, _ = torch.sort(angles)
+        # Check if model is training or evaluating
+        if self.training:
+            angles = torch.rand(self.T, device=device) * 360.0
+        else:
+            angles = torch.linspace(0, 360.0, steps=self.T + 1, device=device)[:-1]
+            
         angles, _ = torch.sort(angles)
 
         stack_list = []

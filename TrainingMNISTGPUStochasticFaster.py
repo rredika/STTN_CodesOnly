@@ -11,15 +11,18 @@ from torch.utils.data import Dataset, DataLoader
 import urllib.request
 import zipfile
 import os
-
+import ssl
 import kornia as K
 
 # Import the model from your SinogramsStochasticMNIST.py
-from TTNsinogramsStochastic import TTNSinogramStochastic
+import TTNsinogramsStochastic as sinograms
 
+ssl._create_default_https_context = ssl._create_unverified_context
 url = "http://www.iro.umontreal.ca/~lisa/icml2007data/mnist_rotation_new.zip"
 zip_path = "mnist_rotation.zip"
+print("Downloading dataset...")
 urllib.request.urlretrieve(url, zip_path)
+print("Download complete!")
 
 # Extract files
 with zipfile.ZipFile(zip_path, 'r') as zip_ref:
@@ -135,7 +138,7 @@ def set_seed(seed: int):
 # Train / Eval Loops
 # -----------------------------
 @torch.no_grad()
-def evaluate(model, loader, device, angles, use_amp):
+def evaluate(model, loader, device, use_amp):
     model.eval()
     crit = nn.CrossEntropyLoss()
     total, correct, loss_sum = 0, 0, 0.0
@@ -143,10 +146,9 @@ def evaluate(model, loader, device, angles, use_amp):
 
     for x0, y in loader:
         x0, y = x0.to(device), y.to(device)
-        x_bank = make_rotation_bank_gpu(x0, angles)
-
+       
         with torch.amp.autocast("cuda", enabled=amp_enabled):
-            logits = model(x_bank)
+            logits = model(x0) 
             loss = crit(logits, y)
 
         correct += (logits.argmax(1) == y).sum().item()
@@ -155,7 +157,7 @@ def evaluate(model, loader, device, angles, use_amp):
 
     return loss_sum / total, correct / total
 
-def train_one_epoch(model, loader, optimizer, scaler, device, angles, use_amp, log_every):
+def train_one_epoch(model, loader, optimizer, scaler, device, use_amp, log_every):
     model.train()
     crit = nn.CrossEntropyLoss()
     total, correct, loss_sum = 0, 0, 0.0
@@ -163,11 +165,11 @@ def train_one_epoch(model, loader, optimizer, scaler, device, angles, use_amp, l
     t0 = time.time()
     for step, (x0, y) in enumerate(loader, start=1):
         x0, y = x0.to(device), y.to(device)
-        x_bank = make_rotation_bank_gpu(x0, angles)
+        #x_bank = make_rotation_bank_gpu(x0, angles)
 
         optimizer.zero_grad(set_to_none=True)
         with torch.amp.autocast("cuda", enabled=use_amp):
-            logits = model(x_bank)
+            logits = model(x0)
             loss = crit(logits, y)
         
         scaler.scale(loss).backward()
@@ -201,7 +203,7 @@ def main(cfg: TrainConfig):
     val_loader = DataLoader(test_ds, batch_size=cfg.batch_size, shuffle=False, num_workers=cfg.num_workers)
 
     # Initialize SinogramStochasticCIFAR
-    model = TTNSinogramStochastic(
+    base_model = sinograms.TTNSinogramStochastic(
         input_size=cfg.img_size,
         n_transformations=cfg.n_transformations,
         in_channels=cfg.in_channels,
@@ -215,7 +217,11 @@ def main(cfg: TrainConfig):
         dropout=cfg.dropout,
         scalar_softmax=cfg.scalar_softmax,
         use_patch_embed=cfg.use_patch_embed,
-    ).to(device)
+    )
+    
+    model = sinograms.StochasticTraceWrapper(
+        base_model, 
+        n_transformations=cfg.n_transformations).to(device)
 
     # --- Parameter Count Calculation ---
     total_params = sum(p.numel() for p in model.parameters())
@@ -233,7 +239,9 @@ def main(cfg: TrainConfig):
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.epochs)
-    scaler = torch.amp.GradScaler("cuda", enabled=cfg.use_amp)
+    # Only enable AMP if CUDA is actually available
+    amp_enabled = cfg.use_amp and torch.cuda.is_available()
+    scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled)
 
     # Dataframes to hold results (matches your previous style)
     train_stats = pd.DataFrame(columns=['epoch', 'loss', 'acc']).astype({
@@ -248,14 +256,14 @@ def main(cfg: TrainConfig):
     })
 
     # 360 degree rotation bank
-    angles = torch.linspace(0, 360, steps=cfg.n_transformations + 1, device=device)[:-1]
+    #angles = torch.linspace(0, 360, steps=cfg.n_transformations + 1, device=device)[:-1]
     total_start_time = time.time()
     best_acc = 0.0
     best_epoch = 0
     for epoch in range(1, cfg.epochs + 1):
         print(f"\nEpoch {epoch}/{cfg.epochs}")
-        tr_loss, tr_acc = train_one_epoch(model, train_loader, optimizer, scaler, device, angles, cfg.use_amp, cfg.log_every)
-        val_loss, val_acc = evaluate(model, val_loader, device, angles, cfg.use_amp)
+        tr_loss, tr_acc = train_one_epoch(model, train_loader, optimizer, scaler, device, cfg.use_amp, cfg.log_every)
+        val_loss, val_acc = evaluate(model, val_loader, device, cfg.use_amp)
 
         # Store Training Stats
         new_train_row = pd.DataFrame([[epoch, tr_loss, tr_acc]], columns=['epoch', 'loss', 'acc'])
